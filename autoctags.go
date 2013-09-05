@@ -108,6 +108,16 @@ func main() {
 	}
 
 	if *verbose {
+		fmt.Printf("Running %#v\n", *cmd)
+	}
+	command := exec.Command(parts[0], parts[1:]...)
+	command.Stdout = os.Stdout
+	command.Stderr = os.Stderr
+	if err := command.Run(); err != nil {
+		panic(err)
+	}
+
+	if *verbose {
 		fmt.Printf("Watching %#v, ignoring %v, running %#v on changes\n", *dir, ignores, *cmd)
 	}
 	x := make(chan bool)
