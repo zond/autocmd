@@ -15,6 +15,15 @@ import (
 
 var whitespace = regexp.MustCompile("\\s")
 
+func doIgnore(ignores []*regexp.Regexp, n string) bool {
+	for _, reg := range ignores {
+		if reg.MatchString(n) {
+			return true
+		}
+	}
+	return false
+}
+
 func main() {
 	wd, err := os.Getwd()
 	if err != nil {
@@ -43,21 +52,11 @@ func main() {
 
 	// Process events
 	go func() {
-		ignore := false
-		part := ""
 		var waiting int32
 		for {
 			select {
 			case ev := <-watcher.Event:
-				ignore = false
-				part = ev.Name[len(*dir):]
-				for _, reg := range ignores {
-					if reg.MatchString(part) {
-						ignore = true
-						break
-					}
-				}
-				if !ignore {
+				if !doIgnore(ignores, ev.Name[len(*dir):]) {
 					atomic.AddInt32(&waiting, 1)
 					go func() {
 						<-time.After(time.Millisecond * time.Duration(*wait))
@@ -73,6 +72,19 @@ func main() {
 							}
 						}
 					}()
+					if ev.IsCreate() {
+						if f, err := os.Open(ev.Name); err != nil {
+							fmt.Println(err)
+						} else {
+							if *verbose {
+								fmt.Printf("%v: Watching %#v\n", ev, ev.Name)
+							}
+							if err = watcher.Watch(ev.Name); err != nil {
+								fmt.Println(err)
+							}
+							f.Close()
+						}
+					}
 				}
 			case err := <-watcher.Error:
 				fmt.Println(err)
@@ -101,7 +113,7 @@ func main() {
 			panic(err)
 		}
 		for _, sub := range subs {
-			if sub.IsDir() && strings.Index(sub.Name(), ".") != 0 {
+			if sub.IsDir() && !doIgnore(ignores, filepath.Join(next, sub.Name())[len(*dir):]) {
 				queue = append(queue, filepath.Join(next, sub.Name()))
 			}
 		}
