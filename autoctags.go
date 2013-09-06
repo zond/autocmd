@@ -31,7 +31,7 @@ func main() {
 	}
 	dir := flag.String("dir", wd, "What directory to watch")
 	cmd := flag.String("cmd", "ctags --recurse --sort=yes", "What command to run on changes")
-	ignore := flag.String("ignore", "^/tags$,/\\.,~$", "Comma separated list of regexpes to ignore")
+	ignore := flag.String("ignore", "^/tags$,/\\.,~$,\\.db$,\\.db-journal", "Comma separated list of regexpes to ignore")
 	verbose := flag.Bool("verbose", false, "Whether to verbosely explain what happens")
 	wait := flag.Int("wait", 1000, "Milliseconds to wait before running cmd, in case changes happen in clusters")
 
