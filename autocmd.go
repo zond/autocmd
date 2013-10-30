@@ -18,8 +18,6 @@ func watch(patterns []*regexp.Regexp, n string) bool {
 	for _, reg := range patterns {
 		if reg.MatchString(n) {
 			return true
-		} else {
-			fmt.Println("wth, ", n, "doesnt match", reg)
 		}
 	}
 	return false
