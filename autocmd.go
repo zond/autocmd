@@ -87,6 +87,9 @@ func main() {
 								if err := command.Process.Kill(); err != nil {
 									panic(err)
 								}
+								if err := command.Wait(); err != nil {
+									panic(err)
+								}
 							}
 							if *verbose > not {
 								fmt.Printf("%v: Running %#v\n", ev, *cmd)
