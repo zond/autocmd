@@ -1,4 +1,4 @@
-autoctags
+autocmd
 =========
 
-Will run ctags when files change.
+Will run commands when files change.
