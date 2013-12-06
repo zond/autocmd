@@ -91,8 +91,14 @@ func main() {
 				if watch(patterns, ev.Name[len(*dir):]) {
 					atomic.AddInt32(&waiting, 1)
 					go func() {
+						if *verbose > yeah {
+							fmt.Printf("File changed: %v\n", ev)
+						}
 						<-time.After(time.Millisecond * time.Duration(*wait))
 						if atomic.AddInt32(&waiting, -1) == 0 {
+							if *verbose > yeah {
+								fmt.Printf("Restart needed: %v\n", ev)
+							}
 							restart <- true
 						}
 					}()
