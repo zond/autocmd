@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -37,19 +38,27 @@ func main() {
 		panic(err)
 	}
 	dir := flag.String("dir", wd, "What directory to watch")
-	cmd := flag.String("cmd", "", "What command to run on changes")
 	verbose := flag.Int("verbose", 0, "How verbose to be, higher is more verbose")
 	wait := flag.Int("wait", 1000, "Milliseconds to wait before running cmd, in case changes happen in clusters")
+	between := flag.Int("between", 0, "Milliseconds to wait before starting proces again after a stop")
+	sigint := flag.Int("sigint", 0, "If set, process will be killed nicely and got this many ms before kill")
 
 	oldUsage := flag.Usage
 	flag.Usage = func() {
+		fmt.Fprintf(os.Stderr, "./autocmd <flags> <command> -- <files_to_monitor>\n")
 		oldUsage()
-		fmt.Fprintf(os.Stderr, "All extra arguments are parsed as regular expressions to watch within -dir\n")
 	}
 
 	flag.Parse()
 
-	if *cmd == "" || len(flag.Args()) == 0 {
+	cmds := []string{}
+	for _, c := range flag.Args() {
+		if c == "--" {
+			break
+		}
+		cmds = append(cmds, c)
+	}
+	if len(cmds) < 1 {
 		flag.Usage()
 		return
 	}
@@ -60,46 +69,31 @@ func main() {
 		patterns = append(patterns, regexp.MustCompile(pattern))
 	}
 
-	parts := whitespace.Split(*cmd, -1)
+	if len(patterns) < 1 {
+		flag.Usage()
+		return
+	}
 
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		panic(err)
 	}
 
-	var command *exec.Cmd
+	restart := make(chan bool)
 
 	// Process events
 	go func() {
 		var waiting int32
 		for {
 			select {
+
 			case ev := <-watcher.Event:
 				if watch(patterns, ev.Name[len(*dir):]) {
 					atomic.AddInt32(&waiting, 1)
 					go func() {
 						<-time.After(time.Millisecond * time.Duration(*wait))
 						if atomic.AddInt32(&waiting, -1) == 0 {
-							if command != nil {
-								if *verbose > some {
-									fmt.Printf("%v: Killing %v", ev, command.Path)
-								}
-								if err := command.Process.Kill(); err != nil {
-									panic(err)
-								}
-								if err := command.Wait(); err != nil {
-									panic(err)
-								}
-							}
-							if *verbose > not {
-								fmt.Printf("%v: Running %#v\n", ev, *cmd)
-							}
-							command = exec.Command(parts[0], parts[1:]...)
-							command.Stdout = os.Stdout
-							command.Stderr = os.Stderr
-							if err := command.Start(); err != nil {
-								fmt.Println(err)
-							}
+							restart <- true
 						}
 					}()
 					if ev.IsCreate() {
@@ -149,18 +143,43 @@ func main() {
 		}
 	}
 
-	if *verbose > not {
-		fmt.Printf("Running %#v\n", *cmd)
-	}
-	command = exec.Command(parts[0], parts[1:]...)
-	command.Stdout = os.Stdout
-	command.Stderr = os.Stderr
-	if err := command.Start(); err != nil {
-		panic(err)
-	}
+	go func() {
+		for {
+			command := exec.Command(cmds[0], cmds[1:]...)
+			command.Stdout = os.Stdout
+			command.Stderr = os.Stderr
+			if err := command.Start(); err != nil {
+				fmt.Println(err)
+			}
+			if *verbose > not {
+				fmt.Printf("Running %v pid: %v\n", cmds, command.Process.Pid)
+			}
+
+			<-restart
+			if *verbose > some {
+				fmt.Printf("Killing %v pid: %v\n", command.Path, command.Process.Pid)
+			}
+
+			if *sigint > 0 {
+				if err := command.Process.Signal(syscall.SIGINT); err != nil {
+					fmt.Printf("Unable to sigint process: %s pid: %v\n", err, command.Process.Pid)
+				}
+				time.Sleep(time.Millisecond * time.Duration(*sigint))
+			}
+
+			if err := command.Process.Kill(); err != nil {
+				fmt.Printf("Unable to kill process: %s pid: %v\n", err, command.Process.Pid)
+			}
+
+			if err := command.Wait(); err != nil {
+				fmt.Printf("Process pid: %v exited with: %s\n", command.Process.Pid, err)
+			}
+			time.Sleep(time.Millisecond * time.Duration(*between))
+		}
+	}()
 
 	if *verbose > some {
-		fmt.Printf("Watching %#v matching %v, running %#v on changes\n", *dir, patterns, *cmd)
+		fmt.Printf("Watching %#v matching %v, running %#v on changes\n", *dir, patterns, cmds)
 	}
 	x := make(chan bool)
 	<-x
