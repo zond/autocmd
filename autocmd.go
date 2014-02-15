@@ -3,7 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/howeyc/fsnotify"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +11,8 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"github.com/howeyc/fsnotify"
 )
 
 var whitespace = regexp.MustCompile("\\s")
@@ -38,6 +40,7 @@ func main() {
 		panic(err)
 	}
 	dir := flag.String("dir", wd, "What directory to watch")
+	ignore := flag.String("ignore", "\\/\\.", "What files and directories to always ignore")
 	verbose := flag.Int("verbose", 0, "How verbose to be, higher is more verbose")
 	wait := flag.Int("wait", 1000, "Milliseconds to wait before running cmd, in case changes happen in clusters")
 	between := flag.Int("between", 0, "Milliseconds to wait before starting proces again after a stop")
@@ -69,6 +72,8 @@ func main() {
 		patterns = append(patterns, regexp.MustCompile(pattern))
 	}
 
+	ignorePattern := regexp.MustCompile(*ignore)
+
 	if len(patterns) < 1 {
 		flag.Usage()
 		return
@@ -84,35 +89,38 @@ func main() {
 	// Process events
 	go func() {
 		var waiting int32
+		part := ""
 		for {
 			select {
 
 			case ev := <-watcher.Event:
-				if watch(patterns, ev.Name[len(*dir):]) {
-					atomic.AddInt32(&waiting, 1)
-					go func() {
-						if *verbose > yeah {
-							fmt.Printf("File changed: %v\n", ev)
-						}
-						<-time.After(time.Millisecond * time.Duration(*wait))
-						if atomic.AddInt32(&waiting, -1) == 0 {
+				part = ev.Name[len(*dir):]
+				if !ignorePattern.MatchString(part) {
+					if watch(patterns, part) {
+						atomic.AddInt32(&waiting, 1)
+						go func() {
 							if *verbose > yeah {
-								fmt.Printf("Restart needed: %v\n", ev)
+								log.Printf("File changed: %v\n", ev)
 							}
-							restart <- true
-						}
-					}()
+							time.Sleep(time.Millisecond * time.Duration(*wait))
+							if atomic.AddInt32(&waiting, -1) == 0 {
+								if *verbose > yeah {
+									log.Printf("Restart needed: %v\n", ev)
+								}
+								restart <- true
+							}
+						}()
+					}
 					if ev.IsCreate() {
-						if f, err := os.Open(ev.Name); err != nil {
+						if st, err := os.Stat(ev.Name); err != nil {
 							fmt.Println(err)
-						} else {
+						} else if st.IsDir() || watch(patterns, part) {
 							if *verbose > yeah {
-								fmt.Printf("%v: Watching %#v\n", ev, ev.Name)
+								log.Printf("%v: Watching %#v\n", ev, ev.Name)
 							}
 							if err = watcher.Watch(ev.Name); err != nil {
 								fmt.Println(err)
 							}
-							f.Close()
 						}
 					}
 				}
@@ -124,27 +132,42 @@ func main() {
 
 	queue := []string{*dir}
 	next := ""
+	part := ""
 	for len(queue) > 0 {
 		next = queue[0]
+		part = next[len(*dir):]
 		queue = queue[1:]
-		if *verbose > yeah {
-			fmt.Println("Watching", next)
-		}
-		err := watcher.Watch(next)
+		st, err := os.Stat(next)
 		if err != nil {
 			panic(err)
 		}
-		f, err := os.Open(next)
-		if err != nil {
-			panic(err)
-		}
-		subs, err := f.Readdir(-1)
-		if err != nil {
-			panic(err)
-		}
-		for _, sub := range subs {
-			if sub.IsDir() {
-				queue = append(queue, filepath.Join(next, sub.Name()))
+		if !ignorePattern.MatchString(part) {
+			if st.IsDir() || watch(patterns, part) {
+				if *verbose > yeah {
+					fmt.Println("Watching", part, ignorePattern)
+				}
+				err = watcher.Watch(next)
+				if err != nil {
+					panic(err)
+				}
+			}
+			if st.IsDir() {
+				f, err := os.Open(next)
+				if err != nil {
+					panic(err)
+				}
+				subs, err := f.Readdir(-1)
+				if err != nil {
+					panic(err)
+				}
+				if err := f.Close(); err != nil {
+					panic(err)
+				}
+				for _, sub := range subs {
+					if sub.IsDir() {
+						queue = append(queue, filepath.Join(next, sub.Name()))
+					}
+				}
 			}
 		}
 	}
@@ -158,34 +181,34 @@ func main() {
 				fmt.Println(err)
 			}
 			if *verbose > not {
-				fmt.Printf("Running %v pid: %v\n", cmds, command.Process.Pid)
+				log.Printf("Running %v pid: %v\n", cmds, command.Process.Pid)
 			}
 
 			<-restart
 			if *verbose > some {
-				fmt.Printf("Killing %v pid: %v\n", command.Path, command.Process.Pid)
+				log.Printf("Killing %v pid: %v\n", command.Path, command.Process.Pid)
 			}
 
 			if *sigint > 0 {
 				if err := command.Process.Signal(syscall.SIGINT); err != nil {
-					fmt.Printf("Unable to sigint process: %s pid: %v\n", err, command.Process.Pid)
+					log.Printf("Unable to sigint process: %s pid: %v\n", err, command.Process.Pid)
 				}
 				time.Sleep(time.Millisecond * time.Duration(*sigint))
 			}
 
 			if err := command.Process.Kill(); err != nil {
-				fmt.Printf("Unable to kill process: %s pid: %v\n", err, command.Process.Pid)
+				log.Printf("Unable to kill process: %s pid: %v\n", err, command.Process.Pid)
 			}
 
 			if err := command.Wait(); err != nil {
-				fmt.Printf("Process pid: %v exited with: %s\n", command.Process.Pid, err)
+				log.Printf("Process pid: %v exited with: %s\n", command.Process.Pid, err)
 			}
 			time.Sleep(time.Millisecond * time.Duration(*between))
 		}
 	}()
 
 	if *verbose > some {
-		fmt.Printf("Watching %#v matching %v, running %#v on changes\n", *dir, patterns, cmds)
+		log.Printf("Watching %#v matching %v, running %#v on changes\n", *dir, patterns, cmds)
 	}
 	x := make(chan bool)
 	<-x
