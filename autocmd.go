@@ -100,7 +100,7 @@ func main() {
 						atomic.AddInt32(&waiting, 1)
 						go func() {
 							if *verbose > yeah {
-								log.Printf("File changed: %v\n", ev)
+								log.Printf("File changed: %#v\n", ev)
 							}
 							time.Sleep(time.Millisecond * time.Duration(*wait))
 							if atomic.AddInt32(&waiting, -1) == 0 {
