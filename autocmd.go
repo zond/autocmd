@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -45,6 +46,7 @@ func main() {
 	wait := flag.Int("wait", 1000, "Milliseconds to wait before running cmd, in case changes happen in clusters")
 	between := flag.Int("between", 0, "Milliseconds to wait before starting proces again after a stop")
 	sigint := flag.Int("sigint", 0, "If set, process will be killed nicely and got this many ms before kill")
+	typ := flag.String("type", ".*", "The regexp to match the type of change events that will trigger the command")
 
 	oldUsage := flag.Usage
 	flag.Usage = func() {
@@ -53,6 +55,8 @@ func main() {
 	}
 
 	flag.Parse()
+
+	typeReg := regexp.MustCompile(*typ)
 
 	cmds := []string{}
 	for _, c := range flag.Args() {
@@ -97,19 +101,23 @@ func main() {
 				part = ev.Name[len(*dir):]
 				if !ignorePattern.MatchString(part) {
 					if watch(patterns, part) {
-						atomic.AddInt32(&waiting, 1)
-						go func() {
-							if *verbose > yeah {
-								log.Printf("File changed: %#v\n", ev)
-							}
-							time.Sleep(time.Millisecond * time.Duration(*wait))
-							if atomic.AddInt32(&waiting, -1) == 0 {
+						bits := strings.Split(ev.String(), ":")
+						evType := strings.TrimSpace(bits[len(bits)-1])
+						if typeReg.MatchString(evType) {
+							atomic.AddInt32(&waiting, 1)
+							go func() {
 								if *verbose > yeah {
-									log.Printf("Restart needed: %v\n", ev)
+									log.Printf("File changed: -%#v-\n", ev)
 								}
-								restart <- true
-							}
-						}()
+								time.Sleep(time.Millisecond * time.Duration(*wait))
+								if atomic.AddInt32(&waiting, -1) == 0 {
+									if *verbose > yeah {
+										log.Printf("Restart needed: %v\n", ev)
+									}
+									restart <- true
+								}
+							}()
+						}
 					}
 					if ev.IsCreate() {
 						if st, err := os.Stat(ev.Name); err != nil {
